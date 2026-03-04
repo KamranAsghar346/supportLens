@@ -6,7 +6,7 @@ SupportLens is a lightweight observability tool for monitoring a customer suppor
 
 ## Tech Stack
 
-- **Backend:** Python, FastAPI, SQLAlchemy, SQLite
+- **Backend:** Python, FastAPI, SQLAlchemy, SQLite (local) / PostgreSQL (Docker)
 - **Frontend:** React, Vite
 - **LLM:** OpenAI GPT-4o-mini (chatbot responses & trace classification)
 
@@ -14,9 +14,25 @@ SupportLens is a lightweight observability tool for monitoring a customer suppor
 
 - **Python 3.10+**
 - **Node.js 18+** and npm
-- **OpenAI API Key**
+- **OpenAI API Key** (optional for read-only mode; required for chat and classification)
 
-## Setup & Running Locally
+## Quick Start with Docker (Recommended)
+
+```bash
+git clone https://github.com/KamranAsghar346/supportLens.git
+cd supportLens
+cp .env.example .env
+# Edit .env and add your OPENAI_API_KEY (or leave empty for degraded mode)
+docker compose up --build -d
+```
+
+- **Frontend:** http://localhost (port 80)
+- **Backend API:** http://localhost:8000
+- **Health check:** http://localhost:8000/health
+
+Seed data loads automatically on first run. Data persists in a Docker volume across `docker compose down` and `docker compose up`.
+
+## Setup & Running Locally (Development)
 
 ### 1. Clone the repository
 
@@ -105,11 +121,14 @@ The frontend will be available at `http://localhost:5173`.
 ├── backend/
 │   ├── main.py            # FastAPI app with all endpoints & LLM prompts
 │   ├── models.py          # SQLAlchemy Trace model
-│   ├── database.py        # SQLite database configuration
+│   ├── database.py        # SQLite/PostgreSQL configuration
+│   ├── log_config.py      # Structured JSON logging
 │   ├── seed.py            # 22 pre-classified seed traces
-│   ├── requirements.txt   # Python dependencies
-│   └── .env.example       # Environment variable template
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── frontend/
+│   ├── Dockerfile         # Multi-stage: build + nginx
+│   ├── nginx.conf         # Serves static + proxies /api to backend
 │   ├── src/
 │   │   ├── App.jsx        # Main app with tab navigation
 │   │   ├── api.js         # API client functions

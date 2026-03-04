@@ -1,25 +1,74 @@
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from dotenv import load_dotenv
 from openai import OpenAI
 
 from database import engine, get_db, Base
 from models import Trace, CategoryEnum
+from log_config import configure_logging, get_logger
 
-load_dotenv()
+configure_logging()
+logger = get_logger("main")
 
-app = FastAPI(title="SupportLens API", version="1.0.0")
+# Process start time for uptime
+_process_start_time = time.time()
 
-# CORS — allow frontend dev server
+# ---------------------------------------------------------------------------
+# LLM availability
+# ---------------------------------------------------------------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+
+def _llm_available() -> bool:
+    """True if LLM is configured and reachable."""
+    return bool(OPENAI_API_KEY)
+
+
+def _probe_llm() -> tuple[bool, str]:
+    """Probe LLM provider. Returns (success, message)."""
+    if not OPENAI_API_KEY or not _client:
+        return False, "not_configured"
+    try:
+        _client.models.list()
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)[:100]
+
+
+@asynccontextmanager
+async def lifespan(application):
+    """Startup: create tables, seed if empty. Shutdown: cleanup."""
+    db = next(get_db())
+    try:
+        Base.metadata.create_all(bind=engine)
+        count = db.query(func.count(Trace.id)).scalar()
+        if count == 0:
+            from seed import seed_database
+            seed_database(db)
+            logger.info("seeded_database", trace_count=22)
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(title="SupportLens API", version="1.0.0", lifespan=lifespan)
+
+# CORS — allow frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,12 +76,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Create tables
-Base.metadata.create_all(bind=engine)
-
-# OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ---------------------------------------------------------------------------
 # LLM Prompts
@@ -84,41 +127,62 @@ VALID_CATEGORIES = {
 
 
 def classify_trace(user_message: str, bot_response: str) -> CategoryEnum:
-    """Classify a trace into one of five categories using the LLM."""
+    """Classify a trace using the LLM, or GENERAL_INQUIRY if LLM unavailable."""
+    if not _client:
+        logger.warning("llm_classification_skipped", reason="no_api_key")
+        return CategoryEnum.GENERAL_INQUIRY
     prompt = CLASSIFICATION_PROMPT.format(
         user_message=user_message, bot_response=bot_response
     )
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=20,
-    )
-    raw = response.choices[0].message.content.strip().lower()
+    try:
+        response = _client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=20,
+        )
+        raw = response.choices[0].message.content.strip().lower()
+    except Exception as e:
+        logger.warning("llm_classification_failed", error=str(e)[:200])
+        return CategoryEnum.GENERAL_INQUIRY
     category = VALID_CATEGORIES.get(raw)
     if category is None:
-        # Fallback: try partial matching
         for key, val in VALID_CATEGORIES.items():
             if key in raw:
                 return val
+        logger.info("llm_unexpected_category", raw=raw)
         return CategoryEnum.GENERAL_INQUIRY
     return category
 
 
 def generate_chat_response(user_message: str) -> tuple[str, int]:
-    """Generate a chatbot response and return (response_text, response_time_ms)."""
+    """Generate a chatbot response, or fallback message if LLM unavailable."""
     start = time.time()
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": CHATBOT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.7,
-        max_tokens=300,
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
-    return response.choices[0].message.content.strip(), elapsed_ms
+    if not _client:
+        elapsed_ms = int((time.time() - start) * 1000)
+        return (
+            "I'm currently unable to process your request. The LLM service is not configured. Please try again later or contact support.",
+            elapsed_ms,
+        )
+    try:
+        response = _client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": CHATBOT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.7,
+            max_tokens=300,
+        )
+        elapsed_ms = int((time.time() - start) * 1000)
+        return response.choices[0].message.content.strip(), elapsed_ms
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.warning("llm_chat_failed", error=str(e)[:200])
+        return (
+            "I encountered an error processing your request. Please try again later.",
+            elapsed_ms,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +223,100 @@ class AnalyticsResponse(BaseModel):
     average_response_time_ms: float
 
 
+class HealthResponse(BaseModel):
+    status: str  # "healthy" | "degraded" | "unhealthy"
+    database: str  # "ok" | "error"
+    llm: str  # "ok" | "not_configured" | "error"
+    uptime_seconds: float
+    message: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Request logging middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())[:8]
+    start = time.time()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    except Exception as e:
+        logger.exception("request_failed", request_id=request_id, path=request.url.path, error=str(e))
+        raise
+    finally:
+        # Skip logging for /health to avoid log flooding from orchestrator polls
+        if request.url.path != "/health":
+            duration_ms = round((time.time() - start) * 1000)
+            logger.info(
+                "request",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status=status_code,
+                duration_ms=duration_ms,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/health", response_model=HealthResponse)
+def health(db: Session = Depends(get_db)):
+    """
+    Health check probing database and LLM.
+    - healthy: DB ok, LLM ok or not_configured (read-only mode)
+    - degraded: DB ok, LLM not_configured (chat/classification unavailable)
+    - unhealthy: DB unreachable
+    """
+    uptime = round(time.time() - _process_start_time, 1)
+    db_ok = False
+    try:
+        db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as e:
+        logger.warning("health_db_failed", error=str(e))
+        return HealthResponse(
+            status="unhealthy",
+            database="error",
+            llm="unknown",
+            uptime_seconds=uptime,
+            message=f"Database unreachable: {str(e)[:100]}",
+        )
+    llm_ok, llm_msg = _probe_llm()
+    if not db_ok:
+        return HealthResponse(
+            status="unhealthy",
+            database="error",
+            llm=llm_msg,
+            uptime_seconds=uptime,
+        )
+    if llm_msg == "not_configured":
+        return HealthResponse(
+            status="degraded",
+            database="ok",
+            llm="not_configured",
+            uptime_seconds=uptime,
+            message="Read-only mode: traces and analytics work; chat and classification require OPENAI_API_KEY",
+        )
+    if not llm_ok:
+        return HealthResponse(
+            status="degraded",
+            database="ok",
+            llm="error",
+            uptime_seconds=uptime,
+            message=f"LLM probe failed: {llm_msg}",
+        )
+    return HealthResponse(
+        status="healthy",
+        database="ok",
+        llm="ok",
+        uptime_seconds=uptime,
+    )
 
 @app.post("/chat", response_model=TraceResponse)
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
@@ -291,26 +446,6 @@ def get_analytics(db: Session = Depends(get_db)):
         categories=categories,
         average_response_time_ms=round(avg_rt, 1),
     )
-
-
-# ---------------------------------------------------------------------------
-# Seed data on startup
-# ---------------------------------------------------------------------------
-from contextlib import asynccontextmanager
-from seed import seed_database
-
-
-@asynccontextmanager
-async def lifespan(application):
-    db = next(get_db())
-    count = db.query(func.count(Trace.id)).scalar()
-    if count == 0:
-        seed_database(db)
-    db.close()
-    yield
-
-
-app.router.lifespan_context = lifespan
 
 
 if __name__ == "__main__":

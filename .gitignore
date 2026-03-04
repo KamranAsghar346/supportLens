@@ -64,4 +64,3 @@ venv.bak/
 # Vite / Frontend output
 frontend/dist/
 frontend/node_modules/
-docs/

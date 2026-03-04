@@ -4,9 +4,10 @@ covering all five categories.
 """
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
+from models import CategoryEnum, Trace
 from sqlalchemy.orm import Session
-from models import Trace, CategoryEnum
 
 SEED_TRACES = [
     # === Billing (5) ===

@@ -1,10 +1,10 @@
+import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Integer, DateTime, Enum as SAEnum
 from database import Base
-
-import enum
+from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Enum as SAEnum
 
 
 class CategoryEnum(str, enum.Enum):

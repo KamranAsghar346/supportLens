@@ -5,21 +5,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from database import Base, engine, get_db
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from openai import OpenAI
-
-from database import engine, get_db, Base
-from models import Trace, CategoryEnum
 from log_config import configure_logging, get_logger
+from models import CategoryEnum, Trace
+from openai import OpenAI
+from pydantic import BaseModel
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session
 
 configure_logging()
 logger = get_logger("main")

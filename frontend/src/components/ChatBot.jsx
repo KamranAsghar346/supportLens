@@ -28,6 +28,7 @@ function ChatBot({ onNewTrace }) {
             ]);
             if (onNewTrace) onNewTrace();
         } catch (err) {
+            console.error('Chat send failed:', err);
             setConversation((prev) => [
                 ...prev,
                 { role: 'error', text: 'Failed to get response. Please try again.' },

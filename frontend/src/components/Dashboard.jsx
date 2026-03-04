@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getTraces, getAnalytics } from '../api';
 import AggregateStats from './AggregateStats';
 import TraceTable from './TraceTable';
@@ -10,7 +10,7 @@ function Dashboard({ refreshKey }) {
     const [selectedCategory, setSelectedCategory] = useState('');
     const [loading, setLoading] = useState(true);
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true);
         try {
             const [tracesData, analyticsData] = await Promise.all([
@@ -24,11 +24,11 @@ function Dashboard({ refreshKey }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [selectedCategory]);
 
     useEffect(() => {
         fetchData();
-    }, [selectedCategory, refreshKey]);
+    }, [fetchData, refreshKey]);
 
     const categories = [
         'Billing',

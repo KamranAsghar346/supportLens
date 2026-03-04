@@ -1,0 +1,68 @@
+.trace-table-wrapper {
+    overflow-x: auto;
+}
+
+.trace-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.trace-table thead th {
+    text-align: left;
+    padding: 12px 16px;
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+}
+
+.trace-table tbody tr.trace-row {
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.trace-table tbody tr.trace-row:hover {
+    background: var(--bg-hover);
+}
+
+.trace-table tbody tr.trace-row.expanded {
+    background: var(--bg-hover);
+}
+
+.trace-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    vertical-align: top;
+}
+
+.col-time {
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: var(--text-muted) !important;
+    min-width: 160px;
+}
+
+.col-msg {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.col-rt {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+
+.trace-detail-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid var(--border);
+}
